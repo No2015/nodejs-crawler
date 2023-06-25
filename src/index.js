@@ -87,9 +87,9 @@ class Core {
                     const { $ } = res;
 
                     // 获取详情页------------------------- start
-                    // const urls = $('#list a');
+                    const urls = $('#list a');
 
-                    // this.getUrls($, urls)
+                    this.getUrls($, urls)
                     // 获取详情页------------------------- end
                     
                     // 生成首页内容-------------------- start
@@ -268,9 +268,9 @@ class Core {
                     let html = $('body').html()
                     
                     // 获取详情页------------------------- start
-                    const urls = $('a');
+                    // const urls = $('a');
 
-                    this.getUrls($, urls)
+                    // this.getUrls($, urls)
                     // 获取详情页------------------------- end
 
                     const content = this.formatContent(html);
