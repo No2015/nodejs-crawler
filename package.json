@@ -1,7 +1,7 @@
 {
-  "name": "sw-cn",
+  "name": "bqg-cn",
   "version": "1.0.0",
-  "description": "小网站爬虫",
+  "description": "笔趣阁爬虫",
   "main": "src/index.js",
   "dependencies": {
     "body-parser": "^1.20.2",
