@@ -87,13 +87,13 @@ class Core {
                     const { $ } = res;
 
                     // 获取详情页------------------------- start
-                    const urls = $('#list a');
+                    // const urls = $('#list a');
 
-                    this.getUrls($, urls)
+                    // this.getUrls($, urls)
                     // 获取详情页------------------------- end
                     
                     // 生成首页内容-------------------- start
-                    let html = $('html').html()
+                    let html = $('body').html()
                     
                     const content = this.formatContent(html);
                     const page = 'index.html'
@@ -130,7 +130,7 @@ class Core {
         console.log('>>>pageSum ', this.pageSum)
     }
     downloadImg(imgUrl, fileName) {
-        
+
         const dirName = fileName.match(/(.*)\//)[1]
         
         if(!fs.existsSync(dirName)) {
@@ -164,6 +164,7 @@ class Core {
     }
     formatContent(html) {
         const srcs = []
+        html = html.replace(/(?<!:)(\/\/www)/g,'http:$1')
 
         // 读取资源文件，更换资源文件地址
         const replaceList = [/http(s)?[^\"]*jp(e)?g/g, /http(s)?[^\"]*mp4/g, /http(s)?[^\"]*css/g, /http(s)?[^\"]*png/g, /http(s)?[^\"]*svg/g]
@@ -174,7 +175,7 @@ class Core {
                         srcs.push(s.replace(/\\/g, ''))
                     }
                 })
-                return src.replace(/http[^"]*(com|org)\//g, this.pageId)
+                return src.replace(/http[^"]*(com|org)\//g, '')
             })
         })
 
@@ -188,20 +189,13 @@ class Core {
                 return ''
             }
         })
-        
-        // 删除srcset
-        html = html.replace(/srcset/g, '_srcset')
-
-        // 替换源
-        html = html.replace(/勒享/g, '新屋')
-        html = html.replace(/(lxsw2020|Lxsw2020)/g, 'xinwu')
 
         // 下载资源
         let time = 0
         for (let i = 0; i < srcs.length; i++) {
             const src = srcs[i]
             const fileName = src.replace(/(.*\/)/g, '')
-            const _src = src.replace(/http[^"]*(com|org)/g, path.resolve(__dirname, '../' + this.pageId))
+            const _src = src.replace(/http[^"]*(com|org)/g, path.resolve(__dirname, '../../' + this.pageId))
             if (fileName.match(/\./)) {
                 if(!fs.existsSync(_src) && !this.srcs.find(s => s === src)) {
                     this.srcs.push(src)
@@ -237,7 +231,13 @@ class Core {
         
             const content = `<!DOCTYPE html>
             <html lang="zh-CN">
+            <head>
+            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+            <link rel="stylesheet" type="text/css" href="images/biquge.css">
+            </head>
+            <body>
             ${res}
+            </body>
             </html>`;
         
             fs.writeFile(`${filepath}/${page}`, content, (e) => {
@@ -265,12 +265,12 @@ class Core {
                 }
                 else {
                     const { $ } = res;
-                    let html = $('html').html()
+                    let html = $('body').html()
                     
                     // 获取详情页------------------------- start
-                    // const urls = $('a');
+                    const urls = $('a');
 
-                    // this.getUrls($, urls)
+                    this.getUrls($, urls)
                     // 获取详情页------------------------- end
 
                     const content = this.formatContent(html);
