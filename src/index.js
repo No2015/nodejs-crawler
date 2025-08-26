@@ -1,4 +1,4 @@
-const fs = require('fs').promises;
+const fs = require('fs'); // 保留完整的 fs 模块
 const path = require('path');
 const Crawler = require('crawler');
 const jsdom = require('jsdom');
@@ -270,7 +270,7 @@ class Core {
 
   async writePage(filePath, content) {
     try {
-      await fs.writeFile(filePath, content, 'utf8');
+      await fs.promises.writeFile(filePath, content, 'utf8');
       debug(`📄 页面已保存: ${filePath}`);
     } catch (err) {
       console.error('写入文件失败:', err);
