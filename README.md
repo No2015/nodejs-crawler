@@ -1,8 +1,8 @@
 # 抓笔趣阁小说
 
-# 替换id
+# 替换小说目录
 ```
-  new Core('https://www.bqgda.cc/books', '小说id');
+  const ENTRY_URL = 'https://www.c9bfbcdc82.sbs/book/182355/'; // 可改成你的目录页
 ```
 # 抓取
 `yarn build`
