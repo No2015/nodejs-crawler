@@ -82,11 +82,11 @@ async function fetchWithRetry(url, tries = RETRY) {
         const chapDoc = chapDom.window.document;
 
         const contentNode = chapDoc.querySelector('#chaptercontent');
-        let content = `${chapterTitle}\n\n`;
+        let content = '';
         if (contentNode) {
           // 清除 <p class="readinline"> ... </p>
           contentNode.querySelectorAll('p.readinline').forEach(e => e.remove());
-          // 用 <br> 替换为换行
+          // <br> 替换为换行
           let html = contentNode.innerHTML
             .replace(/<br\s*\/?>/gi, '\n')
             .replace(/&nbsp;/gi, ' ');
@@ -95,14 +95,25 @@ async function fetchWithRetry(url, tries = RETRY) {
           html = html.replace(/请收藏本站.*?。/g, '');
 
           // 去除多余空行
-          content += html.replace(/\n{3,}/g, '\n\n').trim();
+          content = html.replace(/\n{3,}/g, '\n\n').trim();
+
+          // 判断开头是否有章节标题
+          // 允许前面有空白、全角空格
+          // 只要章节标题在正文开头20个字符内都算“已包含”
+          const normalized = content.replace(/^[\s\u3000]+/, ''); // 去掉开头空白、全角空格
+          if (normalized.slice(0, 20).includes(chapterTitle)) {
+            // 已含标题，不加
+            // nothing to do
+          } else {
+            content = `${chapterTitle}\n\n${content}`;
+          }
         } else {
-          content += '【正文获取失败】';
+          content = `${chapterTitle}\n\n【正文获取失败】`;
         }
 
         outStream.write(`${content}\n\n`);
         console.log(`完成：${chapterTitle}: ${i + 1}/${chapterNodes.length}`);
-        await new Promise(r => setTimeout(r, 800)); // 防ban
+        await new Promise(r => setTimeout(r, 800));
       } catch (err) {
         console.error('章节抓取失败：', chapterUrl, err.message);
         outStream.write(`【抓取失败】\n\n`);
