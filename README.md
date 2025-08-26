@@ -16,7 +16,7 @@
 
   链接: https://pan.baidu.com/s/1JKw_zgyDawH0lNYfR8JuvQ?pwd=2wwm 提取码: 2wwm 复制这段内容后打开百度网盘手机App，操作更方便哦
 
-  下载msi文件，双击运行，等待结束即可。
+  下载msi文件，双击运行，经过几次确认后，等待结束即可。
 
 - 安装yarn
 
@@ -55,3 +55,13 @@
   如果不确定startIndex的值，可以去小说网站上找到对应的页面，比如`https://www.c9bfbcdc82.sbs/book/182355/715.html`，715.html的715就是页码。
 
   如果要从715开始抓，需要修改为`startIndex = 716`（计算机的下标计算从0开始）
+
+- 并发抓取
+
+  如果需要同时抓取多部小说，可以开启多个cmd或者powershell，修改目录地址，然后保存，执行`yarn build`。
+
+  重复这个动作，就能同时抓取多部小说：
+
+  ```
+    修改地址、保存、执行yarn build
+  ```
