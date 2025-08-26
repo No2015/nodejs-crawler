@@ -101,14 +101,15 @@ class Core {
           done();
           return;
         }
-        const { $, options } = res;
+        const { options } = res;
+        const dom = new jsdom.JSDOM(res.body);
         const currentUrl = options.uri;
 
         try {
           if (currentUrl === `${this.host}/${this.novelId}`) {
-            await this.processIndexPage($, currentUrl);
+            await this.processIndexPage(dom, currentUrl);
           } else {
-            await this.processChapterPage($, currentUrl);
+            await this.processChapterPage(dom, currentUrl);
           }
         } catch (err) {
           pageEnd.error(`处理页面失败: ${currentUrl}`, err);
@@ -119,13 +120,13 @@ class Core {
     });
   }
 
-  async processIndexPage($, url) {
+  async processIndexPage(dom, url) {
+    const { document } = dom.window;
     pageEnd.info(`目录页: ${decodeURI(url)}`);
-    const urls = $('#list a');
-    this.getUrls($, urls);
+    this.getUrls(document);
 
-    const title = $('title').text().trim() || '小说目录';
-    const html = $('body').html();
+    const title = document.querySelector('title')?.textContent?.trim() || '小说目录';
+    const html = document.body.innerHTML;
     const content = await this.processPageContent(html, title, url);
 
     const indexPath = path.join(this.outputDir, 'index.html');
@@ -133,11 +134,12 @@ class Core {
     debug('✅ 目录页生成成功:', indexPath);
   }
 
-  async processChapterPage($, url) {
+  async processChapterPage(dom, url) {
+    const { document } = dom.window;
     pageEnd.info(`章节: ${decodeURI(url)}`);
 
-    const title = $('title').text().trim() || '章节';
-    const html = $('body').html();
+    const title = document.querySelector('title')?.textContent?.trim() || '章节';
+    const html = document.body.innerHTML;
     const fileName = path.basename(new URL(url).pathname) || 'chapter.html';
     const chapterPath = path.join(this.outputDir, fileName);
     const content = await this.processPageContent(html, title, url);
@@ -146,14 +148,14 @@ class Core {
     debug('✅ 章节生成成功:', chapterPath);
   }
 
-  getUrls($, urls) {
-    for (let i = 0; i < urls.length; i++) {
-      const $url = $(urls[i]);
-      const href = $url.attr('href');
-      if (!href) continue;
+  getUrls(document) {
+    const urls = document.querySelectorAll('#list a');
+    urls.forEach(urlEl => {
+      const href = urlEl.getAttribute('href');
+      if (!href) return;
 
       const absoluteUrl = new URL(href, this.host).href;
-      if (this.visited.has(absoluteUrl)) continue;
+      if (this.visited.has(absoluteUrl)) return;
 
       this.visited.add(absoluteUrl);
       this.pageSum++;
@@ -162,7 +164,7 @@ class Core {
         pageStart.info(`章节加入队列: ${decodeURI(absoluteUrl)}`);
         this.c.queue(absoluteUrl);
       });
-    }
+    })
     debug(`📊 共发现 ${this.pageSum} 个章节，已加入队列。`);
   }
 
@@ -174,7 +176,8 @@ class Core {
     html = html.replace(/(?<!:)(\/\/www)/g, 'http:$1');
 
     // 2. 提取资源链接（img、link、script、video、audio等）
-    const $ = jsdom.JSDOM.fragment(html);
+    const dom = new jsdom.JSDOM(html);
+    const { document } = dom.window;
     const assetTypes = {
       img: ['src', 'data-src', 'data-original', 'lazy-src', 'data-full-url'],
       link: ['href'],
@@ -189,7 +192,7 @@ class Core {
 
     // 提取资源并替换路径
     for (const [tag, attrs] of Object.entries(assetTypes)) {
-      $.querySelectorAll(tag).forEach(el => {
+      document.querySelectorAll(tag).forEach(el => {
         attrs.forEach(attr => {
           const src = el.getAttribute(attr);
           if (!src) return;
@@ -215,7 +218,7 @@ class Core {
     }
 
     // 处理内联 <style> 标签中的 url()
-    $.querySelectorAll('style').forEach(styleEl => {
+    document.querySelectorAll('style').forEach(styleEl => {
       const cssText = styleEl.textContent;
       if (!cssText || cssText.trim() === '') return;
       const URL_REGEX = /url\(\s*['"]?([^'")]+?)['"]?\s*\)/gi;
@@ -250,17 +253,17 @@ class Core {
     });
 
     // 清理内联 <script> 内容
-    $.querySelectorAll('script').forEach(scriptEl => {
+    document.querySelectorAll('script').forEach(scriptEl => {
       if (!scriptEl.getAttribute('src')) {
         scriptEl.textContent = '';
       }
     });
 
     // 删除 srcset 属性
-    $.querySelectorAll('[srcset]').forEach(el => el.removeAttribute('srcset'));
+    document.querySelectorAll('[srcset]').forEach(el => el.removeAttribute('srcset'));
 
     // 删除除 stylesheet 外的 link
-    $.querySelectorAll('link').forEach(linkEl => {
+    document.querySelectorAll('link').forEach(linkEl => {
       if (linkEl.getAttribute('rel') !== 'stylesheet') {
         linkEl.remove();
       }
@@ -279,7 +282,7 @@ class Core {
   <link rel="stylesheet" href="assets/biquge.css">
 </head>
 <body>
-  ${$.innerHTML}
+  ${document.innerHTML}
 </body>
 </html>`;
   }
