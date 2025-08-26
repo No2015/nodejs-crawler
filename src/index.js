@@ -1,12 +1,10 @@
-const fs = require('fs'); // 保留完整的 fs 模块
+const fs = require('fs');
 const path = require('path');
 const Crawler = require('crawler');
 const jsdom = require('jsdom');
 const request = require('request');
 const mkdirp = require('mkdirp');
 const debug = require('debug')('crawler');
-
-// ======== 日志配置 (保持您的原有设计) ========
 const log4js = require('log4js');
 
 log4js.configure({
@@ -30,58 +28,46 @@ const pageStart = log4js.getLogger('pageStart');
 const pageEnd = log4js.getLogger('pageEnd');
 const assetsStart = log4js.getLogger('assetsStart');
 const assetsEnd = log4js.getLogger('assetsEnd');
-// =============================================
 
 let PQueue;
-
-// ======== 动态加载 p-queue (ESM 兼容) ========
 (async () => {
   try {
     const pQueueModule = await import('p-queue');
     PQueue = pQueueModule.default;
-    startCrawler(); // 成功加载后启动
+    startCrawler();
   } catch (err) {
     console.error('❌ Failed to load p-queue:', err);
     process.exit(1);
   }
 })();
 
-// ==================== 核心爬虫类 ====================
 class Core {
   constructor(siteUrl, novelId) {
     const url = new URL(siteUrl);
     this.hostname = url.hostname;
-    this.host = siteUrl.replace(/\/$/, ''); // 确保无尾斜杠
+    this.host = siteUrl.replace(/\/$/, '');
     this.novelId = novelId;
+
+    // 目录结构
+    this.projectRoot = path.resolve(__dirname, '../bqg');
+    this.outputDir = path.join(this.projectRoot, novelId);
+    this.assetsDir = path.join(this.outputDir, 'assets');
+
     this.pageSum = 0;
     this.downloadNum = 0;
-    this.visited = new Set();        // 防止重复抓取页面
-    this.srcs = new Set();           // 记录已计划下载的资源 URL
-    this.downloadedAssets = new Set(); // 防止重复下载资源
+    this.visited = new Set();
+    this.srcs = new Set();
+    this.downloadedAssets = new Set();
 
-    // ✅ 项目根目录为 /bqg/小说ID
-    this.projectRoot = path.resolve(__dirname, '../bqg'); // 根目录
-    this.outputDir = path.join(this.projectRoot, novelId); // 输出目录：/bqg/52_52542
-    this.assetsDir = path.join(this.outputDir, 'assets');  // 资源目录：/bqg/52_52542/assets
-
-    // ✅ 使用 p-queue 控制并发
-    this.pageQueue = new PQueue({ concurrency: 5, interval: 2000 }); // 每2秒最多5个页面
-    this.assetQueue = new PQueue({ concurrency: 3 }); // 最多3个资源并发下载
-
-    this.currentPage = {
-      title: '',
-      chapters: []
-    };
+    // 并发控制
+    this.pageQueue = new PQueue({ concurrency: 5, interval: 2000 });
+    this.assetQueue = new PQueue({ concurrency: 3 });
 
     this.c = null;
-    this.initCrawler();
     this.ensureProjectDir();
-
-    // ✅ 实例化完成后立即启动抓取
-    this.start(); // 不需要传 novelId，因为 this.novelId 已经存在
+    this.initCrawler();
   }
 
-  // 确保输出目录存在
   ensureProjectDir() {
     mkdirp.sync(this.outputDir);
     mkdirp.sync(this.assetsDir);
@@ -89,8 +75,17 @@ class Core {
 
   start() {
     const startUrl = `${this.host}/${this.novelId}`;
-    console.log(`🚀 开始抓取小说: ${startUrl}`);
+    pageStart.info(`🚀 开始抓取小说: ${startUrl}`);
     this.c.queue(startUrl);
+
+    this.pageQueue.onEmpty().then(() => {
+      console.log('=== 所有页面抓取任务已完成 ===');
+      console.log(`抓取页面数: ${this.pageSum}`);
+      console.log(`下载资源数: ${this.downloadNum}`);
+    });
+    this.assetQueue.onIdle().then(() => {
+      console.log('=== 所有资源下载任务已完成 ===');
+    });
   }
 
   initCrawler() {
@@ -100,13 +95,12 @@ class Core {
       timeout: 100000,
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
       callback: async (error, res, done) => {
+        const url = res?.options?.uri || 'Unknown';
         if (error) {
-          const url = res?.options?.uri || 'Unknown';
           pageEnd.error(`请求失败: ${url}`, error);
           done();
           return;
         }
-
         const { $, options } = res;
         const currentUrl = options.uri;
 
@@ -126,31 +120,30 @@ class Core {
   }
 
   async processIndexPage($, url) {
-    pageEnd.info(decodeURI(url));
+    pageEnd.info(`目录页: ${decodeURI(url)}`);
     const urls = $('#list a');
     this.getUrls($, urls);
 
     const title = $('title').text().trim() || '小说目录';
     const html = $('body').html();
-    const content = await this.formatContent(html, title);
+    const content = await this.processPageContent(html, title, url);
 
     const indexPath = path.join(this.outputDir, 'index.html');
     await this.writePage(indexPath, content);
-    console.log('✅ 目录页生成成功:', indexPath);
+    debug('✅ 目录页生成成功:', indexPath);
   }
 
   async processChapterPage($, url) {
-    pageEnd.info(decodeURI(url));
+    pageEnd.info(`章节: ${decodeURI(url)}`);
 
     const title = $('title').text().trim() || '章节';
     const html = $('body').html();
-    const content = await this.formatContent(html, title);
+    const fileName = path.basename(new URL(url).pathname) || 'chapter.html';
+    const chapterPath = path.join(this.outputDir, fileName);
+    const content = await this.processPageContent(html, title, url);
 
-    const filename = path.basename(new URL(url).pathname) || 'chapter.html';
-    const chapterPath = path.join(this.outputDir, filename);
     await this.writePage(chapterPath, content);
-
-    console.log('✅ 章节生成成功:', chapterPath);
+    debug('✅ 章节生成成功:', chapterPath);
   }
 
   getUrls($, urls) {
@@ -163,114 +156,217 @@ class Core {
       if (this.visited.has(absoluteUrl)) continue;
 
       this.visited.add(absoluteUrl);
-      const name = decodeURI($url.text().trim());
-      const page = path.basename(href);
-
-      this.currentPage.chapters.push({ name, url: absoluteUrl, page, isLoaded: true });
       this.pageSum++;
 
-      // ✅ 使用 pageQueue 控制页面抓取并发
       this.pageQueue.add(() => {
-        pageStart.info(decodeURI(absoluteUrl));
+        pageStart.info(`章节加入队列: ${decodeURI(absoluteUrl)}`);
         this.c.queue(absoluteUrl);
       });
     }
-
-    console.log(`📊 共发现 ${this.pageSum} 个章节，已加入队列。`);
+    debug(`📊 共发现 ${this.pageSum} 个章节，已加入队列。`);
   }
 
-  async formatContent(html, title) {
-    // 修复协议
+  /**
+   * 处理页面内容，提取资源、清理HTML、下载资源
+   */
+  async processPageContent(html, title, currentUrl) {
+    // 1. 修复协议
     html = html.replace(/(?<!:)(\/\/www)/g, 'http:$1');
 
-    // 提取资源
-    const resourceRegex = /https?:\/\/[^"\s]*\.(jpe?g|png|gif|svg|css|js|mp4|webp)[^"\s]*/gi;
-    const matches = html.match(resourceRegex) || [];
+    // 2. 提取资源链接（img、link、script、video、audio等）
+    const $ = jsdom.JSDOM.fragment(html);
+    const assetTypes = {
+      img: ['src', 'data-src', 'data-original', 'lazy-src', 'data-full-url'],
+      link: ['href'],
+      script: ['src'],
+      video: ['src'],
+      source: ['src'],
+      iframe: ['src'],
+      audio: ['src']
+    };
+    const ASSET_REGEX = /\.(jpe?g|png|gif|webp|svg|css|js|mp4|webm|ogg|wav|woff2?|ttf|ico|bmp|tiff?|pdf|docx?|xlsx?|pptx?|zip|rar|3gp)(\?.*)?$/i;
+    const currentHostname = new URL(currentUrl).hostname;
 
-    for (const src of matches) {
-      if (this.srcs.has(src)) continue;
-      this.srcs.add(src);
+    // 提取资源并替换路径
+    for (const [tag, attrs] of Object.entries(assetTypes)) {
+      $.querySelectorAll(tag).forEach(el => {
+        attrs.forEach(attr => {
+          const src = el.getAttribute(attr);
+          if (!src) return;
+          try {
+            const absoluteUrl = new URL(src, currentUrl).href;
+            const urlObj = new URL(absoluteUrl);
 
-      // ✅ 加入 assetQueue 控制下载并发
-      await this.assetQueue.add(async () => {
-        if (this.downloadedAssets.has(src)) return;
+            if (urlObj.hostname !== currentHostname) return;
+            if (!ASSET_REGEX.test(absoluteUrl)) return;
 
-        const fileName = path.basename(new URL(src).pathname);
-        const assetPath = path.join(this.assetsDir, fileName);
-
-        // 避免重复下载
-        try {
-          await fs.access(assetPath);
-          this.downloadedAssets.add(src);
-          assetsEnd.info(`✅ 资源已存在，跳过: ${decodeURI(src)}`);
-          return;
-        } catch (error) {
-          console.log(`⏬ 开始下载资源: ${decodeURI(src)}`);
-        }
-
-        assetsStart.info(decodeURI(src));
-        await this.downloadWithRetry(src, assetPath);
-        this.downloadedAssets.add(src);
+            const localPath = this.getLocalAssetPath(absoluteUrl);
+            if (!this.downloadedAssets.has(absoluteUrl)) {
+              this.downloadedAssets.add(absoluteUrl);
+              this.downloadImg(absoluteUrl, localPath);
+            }
+            const relativePath = path.relative(this.outputDir, localPath).replace(/\\/g, '/');
+            el.setAttribute(attr, `assets/${path.basename(relativePath)}`);
+          } catch (e) {
+            debug(`Invalid resource URL: ${src}`, e.message);
+          }
+        });
       });
     }
 
-    // 清理 HTML
-    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-    html = html.replace(/https?:\/\/[^"\s]*/g, match => match.includes(this.hostname) ? match : '');
-    html = html.replace(/&nbsp;/g, ' ');
+    // 处理内联 <style> 标签中的 url()
+    $.querySelectorAll('style').forEach(styleEl => {
+      const cssText = styleEl.textContent;
+      if (!cssText || cssText.trim() === '') return;
+      const URL_REGEX = /url\(\s*['"]?([^'")]+?)['"]?\s*\)/gi;
+      const replacements = [];
+      for (const match of cssText.matchAll(URL_REGEX)) {
+        const fullMatch = match[0];
+        const urlInCss = match[1];
+        try {
+          const absoluteUrl = new URL(urlInCss, currentUrl).href;
+          const urlObj = new URL(absoluteUrl);
+          if (urlObj.hostname !== currentHostname) continue;
+          if (!ASSET_REGEX.test(absoluteUrl)) continue;
+          const localPath = this.getLocalAssetPath(absoluteUrl);
+          if (!this.downloadedAssets.has(absoluteUrl)) {
+            this.downloadedAssets.add(absoluteUrl);
+            this.downloadImg(absoluteUrl, localPath);
+          }
+          const relativePath = path.relative(this.outputDir, localPath).replace(/\\/g, '/');
+          const newUrlStr = `url(assets/${path.basename(relativePath)})`;
+          replacements.push({ original: fullMatch, replacement: newUrlStr });
+        } catch (e) {
+          debug(`Invalid URL in CSS: ${urlInCss}`, e.message);
+        }
+      }
+      let newCssText = cssText;
+      for (const { original, replacement } of replacements) {
+        newCssText = newCssText.replace(original, replacement);
+      }
+      if (newCssText !== cssText) {
+        styleEl.textContent = newCssText;
+      }
+    });
 
+    // 清理内联 <script> 内容
+    $.querySelectorAll('script').forEach(scriptEl => {
+      if (!scriptEl.getAttribute('src')) {
+        scriptEl.textContent = '';
+      }
+    });
+
+    // 删除 srcset 属性
+    $.querySelectorAll('[srcset]').forEach(el => el.removeAttribute('srcset'));
+
+    // 删除除 stylesheet 外的 link
+    $.querySelectorAll('link').forEach(linkEl => {
+      if (linkEl.getAttribute('rel') !== 'stylesheet') {
+        linkEl.remove();
+      }
+    });
+
+    // 还可以根据需要删除 meta、广告等
+    // ...
+
+    // 返回处理后的 HTML
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${title}</title>
-    <link rel="stylesheet" href="assets/biquge.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <link rel="stylesheet" href="assets/biquge.css">
 </head>
 <body>
-    ${html}
+  ${$.innerHTML}
 </body>
 </html>`;
   }
 
-  downloadWithRetry(imgUrl, filePath, maxRetries = 3) {
-    return new Promise((resolve, reject) => {
-      let attempts = 0;
+  /**
+   * 获取资源的本地存储路径
+   */
+  getLocalAssetPath(url) {
+    try {
+      const parsedUrl = new URL(url);
+      let { pathname } = parsedUrl;
 
-      const download = () => {
-        const stream = request(encodeURI(imgUrl));
-        const fileStream = fs.createWriteStream(filePath);
-
-        stream.pipe(fileStream);
-
-        stream.on('error', (err) => {
-          fileStream.close();
-          attempts++;
-          if (attempts <= maxRetries) {
-            const delay = Math.pow(2, attempts) * 1000;
-            assetsEnd.error(`🔁 下载失败 (第${attempts}次): ${decodeURI(imgUrl)} - ${err.message}`);
-            setTimeout(download, delay);
-          } else {
-            assetsEnd.error(`❌ 下载失败 (已重试${maxRetries}次): ${decodeURI(imgUrl)}`);
-            fs.unlink(filePath).catch(() => { });
-            reject(err);
-          }
-        });
-
-        fileStream.on('finish', () => {
-          assetsEnd.info(`✅ 下载成功: ${decodeURI(imgUrl)}`);
-          this.downloadNum++;
-          resolve();
-        });
-      };
-
-      download();
-    });
+      if (pathname === '/' || pathname === '') {
+        pathname = '/index';
+      }
+      const cleanPathname = pathname.split('?')[0];
+      const decodedPathname = decodeURIComponent(cleanPathname);
+      return path.join(this.assetsDir, path.basename(decodedPathname));
+    } catch (e) {
+      console.error(`解析URL失败: ${url}`, e);
+      return path.join(this.assetsDir, `unknown_${Date.now()}.bin`);
+    }
   }
 
-  async writePage(filePath, content) {
+  /**
+   * 下载图片/资源
+   */
+  downloadImg(imgUrl, fileName) {
+    this.assetQueue.add(() => this.downloadWithRetry(imgUrl, fileName));
+  }
+
+  /**
+   * 带重试机制的资源下载
+   */
+  async downloadWithRetry(imgUrl, fileName) {
+    const maxRetries = 3;
+    if (fs.existsSync(fileName)) {
+      assetsEnd.info(`File already exists, skipping download: ${fileName}`);
+      this.downloadNum++;
+      return;
+    }
+    const dirName = path.dirname(fileName);
+    if (!fs.existsSync(dirName)) {
+      try {
+        mkdirp.sync(dirName);
+      } catch (e) {
+        assetsEnd.error(`Failed to create directory ${dirName}:`, e);
+        return;
+      }
+    }
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        assetsStart.info(`Downloading: ${decodeURI(imgUrl)}`);
+        await new Promise((resolve, reject) => {
+          const writeStream = fs.createWriteStream(fileName);
+          const requestStream = request.get(encodeURI(imgUrl));
+          requestStream.on('error', reject);
+          writeStream.on('error', (err) => {
+            fs.unlink(fileName, (unlinkErr) => {
+              if (unlinkErr) console.error('Failed to delete incomplete file:', unlinkErr);
+            });
+            reject(err);
+          });
+          writeStream.on('finish', resolve);
+          requestStream.pipe(writeStream);
+        });
+        assetsEnd.info(`Downloaded: ${decodeURI(imgUrl)}`);
+        this.downloadNum++;
+        return;
+      } catch (error) {
+        const delay = 2000 * Math.pow(2, i);
+        assetsEnd.warn(`Download failed (${i + 1}/${maxRetries}): ${decodeURI(imgUrl)}, retrying in ${delay}ms. Error:`, error.message);
+        if (i === maxRetries - 1) {
+          assetsEnd.error(`Download ultimately failed: ${decodeURI(imgUrl)}`);
+          break;
+        }
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+
+  /**
+   * 写入页面文件
+   */
+  async writePage(filePath, htmlContent) {
     try {
-      await fs.promises.writeFile(filePath, content, 'utf8');
+      await fs.promises.writeFile(filePath, htmlContent, 'utf8');
       debug(`📄 页面已保存: ${filePath}`);
     } catch (err) {
       console.error('写入文件失败:', err);
@@ -279,8 +375,8 @@ class Core {
   }
 }
 
-// ======== 启动函数 (由 p-queue 加载后调用) ========
 function startCrawler() {
-  const core = new Core('https://www.bqgda.cc/books', '136187'); // 自动启动
-  console.log('>>> core', core)
+  const core = new Core('https://www.bqgda.cc/books', '136187');
+  core.start();
+  debug('>>> core', core);
 }
