@@ -282,7 +282,7 @@ class Core {
   <link rel="stylesheet" href="assets/biquge.css">
 </head>
 <body>
-  ${document.innerHTML}
+  ${document.body.innerHTML}
 </body>
 </html>`;
   }
