@@ -1,289 +1,286 @@
-const fs = require('fs');
+const fs = require('fs').promises;
+const path = require('path');
 const Crawler = require('crawler');
 const jsdom = require('jsdom');
-const path = require('path');
 const request = require('request');
 const mkdirp = require('mkdirp');
 const debug = require('debug')('crawler');
 
-var log4js = require('log4js');
+// ======== 日志配置 (保持您的原有设计) ========
+const log4js = require('log4js');
 
 log4js.configure({
-	"appenders":{
-        pageStart: {
-            "type": "file",
-            "filename": path.resolve(__dirname, '../logs/pageStart.log'),
-            "category": "pageStart" 
-        },
-        pageEnd: {
-            "type": "file",
-            "filename": path.resolve(__dirname, '../logs/pageEnd.log'),
-            "category": "pageEnd" 
-        },
-        assetsStart: {
-            "type": "file",
-            "filename": path.resolve(__dirname, '../logs/assetsStart.log'),
-            "category": "assetsStart" 
-        },
-        assetsEnd: {
-            "type": "file",
-            "filename": path.resolve(__dirname, '../logs/assetsEnd.log'),
-            "category": "assetsEnd" 
-        },
-		console: { type: 'console' }
-	},
-    categories: {
-        cheese: { appenders: ['pageEnd'], level: 'error' },
-        another: { appenders: ['console'], level: 'trace' },
-        default: { appenders: ['console', 'pageStart'], level: 'trace' },
-        pageEnd: { appenders: ['console', 'pageEnd'], level: 'trace' },
-        pageStart: { appenders: ['console', 'pageStart'], level: 'trace' },
-        assetsStart: { appenders: ['console', 'assetsStart'], level: 'trace' },
-        assetsEnd: { appenders: ['console', 'assetsEnd'], level: 'trace' },
-    }
-})
-var pageStart = log4js.getLogger('pageStart')
-var pageEnd = log4js.getLogger('pageEnd')
-var assetsStart = log4js.getLogger('assetsStart')
-var assetsEnd = log4js.getLogger('assetsEnd')
+  appenders: {
+    pageStart: { type: 'file', filename: path.resolve(__dirname, '../logs2/pageStart.log'), category: 'pageStart' },
+    pageEnd: { type: 'file', filename: path.resolve(__dirname, '../logs2/pageEnd.log'), category: 'pageEnd' },
+    assetsStart: { type: 'file', filename: path.resolve(__dirname, '../logs2/assetsStart.log'), category: 'assetsStart' },
+    assetsEnd: { type: 'file', filename: path.resolve(__dirname, '../logs2/assetsEnd.log'), category: 'assetsEnd' },
+    console: { type: 'console' }
+  },
+  categories: {
+    default: { appenders: ['console', 'pageStart'], level: 'trace' },
+    pageEnd: { appenders: ['console', 'pageEnd'], level: 'trace' },
+    pageStart: { appenders: ['console', 'pageStart'], level: 'trace' },
+    assetsStart: { appenders: ['console', 'assetsStart'], level: 'trace' },
+    assetsEnd: { appenders: ['console', 'assetsEnd'], level: 'trace' },
+  }
+});
 
+const pageStart = log4js.getLogger('pageStart');
+const pageEnd = log4js.getLogger('pageEnd');
+const assetsStart = log4js.getLogger('assetsStart');
+const assetsEnd = log4js.getLogger('assetsEnd');
+// =============================================
 
+let PQueue;
+
+// ======== 动态加载 p-queue (ESM 兼容) ========
+(async () => {
+  try {
+    const pQueueModule = await import('p-queue');
+    PQueue = pQueueModule.default;
+    startCrawler(); // 成功加载后启动
+  } catch (err) {
+    console.error('❌ Failed to load p-queue:', err);
+    process.exit(1);
+  }
+})();
+
+// ==================== 核心爬虫类 ====================
 class Core {
-    constructor(hostUrl) {
-        this.c = null
-        this.host = hostUrl
-        this.pageId = ''
-        this.pageSum = 0
-        this.srcs = []
-        this.currentPage = {
-            title: '',
-            chapters: []
+  constructor(siteUrl, novelId) {
+    const url = new URL(siteUrl);
+    this.hostname = url.hostname;
+    this.host = siteUrl.replace(/\/$/, ''); // 确保无尾斜杠
+    this.novelId = novelId;
+    this.pageSum = 0;
+    this.downloadNum = 0;
+    this.visited = new Set();        // 防止重复抓取页面
+    this.srcs = new Set();           // 记录已计划下载的资源 URL
+    this.downloadedAssets = new Set(); // 防止重复下载资源
+
+    // ✅ 项目根目录为 /bqg/小说ID
+    this.projectRoot = path.resolve(__dirname, '../bqg'); // 根目录
+    this.outputDir = path.join(this.projectRoot, novelId); // 输出目录：/bqg/52_52542
+    this.assetsDir = path.join(this.outputDir, 'assets');  // 资源目录：/bqg/52_52542/assets
+
+    // ✅ 使用 p-queue 控制并发
+    this.pageQueue = new PQueue({ concurrency: 5, interval: 2000 }); // 每2秒最多5个页面
+    this.assetQueue = new PQueue({ concurrency: 3 }); // 最多3个资源并发下载
+
+    this.currentPage = {
+      title: '',
+      chapters: []
+    };
+
+    this.c = null;
+    this.initCrawler();
+    this.ensureProjectDir();
+
+    // ✅ 实例化完成后立即启动抓取
+    this.start(); // 不需要传 novelId，因为 this.novelId 已经存在
+  }
+
+  // 确保输出目录存在
+  ensureProjectDir() {
+    mkdirp.sync(this.outputDir);
+    mkdirp.sync(this.assetsDir);
+  }
+
+  start() {
+    const startUrl = `${this.host}/${this.novelId}`;
+    console.log(`🚀 开始抓取小说: ${startUrl}`);
+    this.c.queue(startUrl);
+  }
+
+  initCrawler() {
+    this.c = new Crawler({
+      jQuery: jsdom,
+      forceUTF8: true,
+      timeout: 100000,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+      callback: async (error, res, done) => {
+        if (error) {
+          const url = res?.options?.uri || 'Unknown';
+          pageEnd.error(`请求失败: ${url}`, error);
+          done();
+          return;
         }
-        this.downloadNum = 0
+
+        const { $, options } = res;
+        const currentUrl = options.uri;
+
+        try {
+          if (currentUrl === `${this.host}/${this.novelId}`) {
+            await this.processIndexPage($, currentUrl);
+          } else {
+            await this.processChapterPage($, currentUrl);
+          }
+        } catch (err) {
+          pageEnd.error(`处理页面失败: ${currentUrl}`, err);
+        } finally {
+          done();
+        }
+      }
+    });
+  }
+
+  async processIndexPage($, url) {
+    pageEnd.info(decodeURI(url));
+    const urls = $('#list a');
+    this.getUrls($, urls);
+
+    const title = $('title').text().trim() || '小说目录';
+    const html = $('body').html();
+    const content = await this.formatContent(html, title);
+
+    const indexPath = path.join(this.outputDir, 'index.html');
+    await this.writePage(indexPath, content);
+    console.log('✅ 目录页生成成功:', indexPath);
+  }
+
+  async processChapterPage($, url) {
+    pageEnd.info(decodeURI(url));
+
+    const title = $('title').text().trim() || '章节';
+    const html = $('body').html();
+    const content = await this.formatContent(html, title);
+
+    const filename = path.basename(new URL(url).pathname) || 'chapter.html';
+    const chapterPath = path.join(this.outputDir, filename);
+    await this.writePage(chapterPath, content);
+
+    console.log('✅ 章节生成成功:', chapterPath);
+  }
+
+  getUrls($, urls) {
+    for (let i = 0; i < urls.length; i++) {
+      const $url = $(urls[i]);
+      const href = $url.attr('href');
+      if (!href) continue;
+
+      const absoluteUrl = new URL(href, this.host).href;
+      if (this.visited.has(absoluteUrl)) continue;
+
+      this.visited.add(absoluteUrl);
+      const name = decodeURI($url.text().trim());
+      const page = path.basename(href);
+
+      this.currentPage.chapters.push({ name, url: absoluteUrl, page, isLoaded: true });
+      this.pageSum++;
+
+      // ✅ 使用 pageQueue 控制页面抓取并发
+      this.pageQueue.add(() => {
+        pageStart.info(decodeURI(absoluteUrl));
+        this.c.queue(absoluteUrl);
+      });
     }
-    start(pageId) {
-        this.pageId = pageId
-        this.initCrawler();
 
-        // 章节列表
-        this.c.queue(this.host + this.pageId);
+    console.log(`📊 共发现 ${this.pageSum} 个章节，已加入队列。`);
+  }
+
+  async formatContent(html, title) {
+    // 修复协议
+    html = html.replace(/(?<!:)(\/\/www)/g, 'http:$1');
+
+    // 提取资源
+    const resourceRegex = /https?:\/\/[^"\s]*\.(jpe?g|png|gif|svg|css|js|mp4|webp)[^"\s]*/gi;
+    const matches = html.match(resourceRegex) || [];
+
+    for (const src of matches) {
+      if (this.srcs.has(src)) continue;
+      this.srcs.add(src);
+
+      // ✅ 加入 assetQueue 控制下载并发
+      await this.assetQueue.add(async () => {
+        if (this.downloadedAssets.has(src)) return;
+
+        const fileName = path.basename(new URL(src).pathname);
+        const assetPath = path.join(this.assetsDir, fileName);
+
+        // 避免重复下载
+        try {
+          await fs.access(assetPath);
+          this.downloadedAssets.add(src);
+          assetsEnd.info(`✅ 资源已存在，跳过: ${decodeURI(src)}`);
+          return;
+        } catch (error) {
+          console.log(`⏬ 开始下载资源: ${decodeURI(src)}`);
+        }
+
+        assetsStart.info(decodeURI(src));
+        await this.downloadWithRetry(src, assetPath);
+        this.downloadedAssets.add(src);
+      });
     }
-    initCrawler() {
-        this.c = new Crawler({
-            jQuery: jsdom,
-            // maxConnections: 10,
-            rateLimit: 2e3,
-            forceUTF8: true,
-            timeout: 1e5,
-            // incomingEncoding: 'gb2312',
-            // method: 'GET',
-            // strictSSL: true,
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-            // This will be called for each crawled page
-            callback: (error, res, done) => {
-                if (error) {
-                    pageEnd.error(error)
-                } else {
-                    const { $ } = res;
 
-                    // 获取详情页------------------------- start
-                    const urls = $('#list a');
+    // 清理 HTML
+    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+    html = html.replace(/https?:\/\/[^"\s]*/g, match => match.includes(this.hostname) ? match : '');
+    html = html.replace(/&nbsp;/g, ' ');
 
-                    this.getUrls($, urls)
-                    // 获取详情页------------------------- end
-                    
-                    // 生成首页内容-------------------- start
-                    let html = $('body').html()
-                    
-                    const content = this.formatContent(html);
-                    const page = 'index.html'
-            
-                    this.writePage('../'+this.pageId, page, content);
-                    // 生成首页内容-------------------- end
-                }
-                done();
-            },
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${title}</title>
+    <link rel="stylesheet" href="assets/biquge.css">
+</head>
+<body>
+    ${html}
+</body>
+</html>`;
+  }
+
+  downloadWithRetry(imgUrl, filePath, maxRetries = 3) {
+    return new Promise((resolve, reject) => {
+      let attempts = 0;
+
+      const download = () => {
+        const stream = request(encodeURI(imgUrl));
+        const fileStream = fs.createWriteStream(filePath);
+
+        stream.pipe(fileStream);
+
+        stream.on('error', (err) => {
+          fileStream.close();
+          attempts++;
+          if (attempts <= maxRetries) {
+            const delay = Math.pow(2, attempts) * 1000;
+            assetsEnd.error(`🔁 下载失败 (第${attempts}次): ${decodeURI(imgUrl)} - ${err.message}`);
+            setTimeout(download, delay);
+          } else {
+            assetsEnd.error(`❌ 下载失败 (已重试${maxRetries}次): ${decodeURI(imgUrl)}`);
+            fs.unlink(filePath).catch(() => { });
+            reject(err);
+          }
         });
-      
-    }
-    
-    getUrls($, urls) {
-        for (let i = 0; i < urls.length; i++) {
-            const $url = $(urls[i]);
-            const name = decodeURI($url.html())
-            const url = this.host + $url.attr('href') + '';
-            const urlArr = url.split('/')
-            const page = decodeURI(urlArr[urlArr.length-1])
-            const isLoaded = false
-            if (!this.currentPage.chapters.find(el => el.url === url)) {
-                this.currentPage.chapters.push({name, url, page, isLoaded});
-            }
-        }
-        for (let i = 0; i < this.currentPage.chapters.length; i++) {
-            const item = this.currentPage.chapters[i]
-            if (!item.isLoaded) {
-                this.pageSum ++
-                item.isLoaded = true
-                this.getOneChapter(item);
-            }
-        }
-        console.log('>>>pageSum ', this.pageSum)
-    }
-    downloadImg(imgUrl, fileName) {
 
-        const dirName = fileName.match(/(.*)\//)[1]
-        
-        if(!fs.existsSync(dirName)) {
-            this.mkdirsSync(dirName)
-        }
-        assetsStart.info(decodeURI(imgUrl))
-        this.download(imgUrl, fileName)
-    }
-    download(imgUrl, fileName) {
-        const downloadStream = request(encodeURI(imgUrl))
-        downloadStream.pipe(fs.createWriteStream(fileName)).on('close', () => {
-            assetsEnd.info(decodeURI(imgUrl))
-        })
-        downloadStream.on('error', e => {
-            assetsEnd.error(`下载图片 ${decodeURI(imgUrl)} 出错,准备重试`, JSON.stringify(e))
-            if (e.code === 'ETIMEDOUT') {
-                this.download(imgUrl, fileName)
-            }
-        })
-    }
-    
-    mkdirsSync(dirName) {
-        if(fs.existsSync(dirName)) {
-            return true;
-        } else {
-            if(this.mkdirsSync(path.dirname(dirName))) {
-                fs.mkdirSync(dirName);
-                return true;
-            }
-        }
-    }
-    formatContent(html) {
-        const srcs = []
-        html = html.replace(/(?<!:)(\/\/www)/g,'http:$1')
-
-        // 读取资源文件，更换资源文件地址
-        const replaceList = [/http(s)?[^\"]*jp(e)?g/g, /http(s)?[^\"]*mp4/g, /http(s)?[^\"]*css/g, /http(s)?[^\"]*png/g, /http(s)?[^\"]*svg/g]
-        replaceList.forEach(rex => {
-            html = html.replace(rex, src => {
-                src.split(' ').forEach(s => {
-                    if (s.match('http')) {
-                        srcs.push(s.replace(/\\/g, ''))
-                    }
-                })
-                return src.replace(/http[^"]*(com|org)\//g, '')
-            })
-        })
-
-        // 删除脚本文件，屏蔽脚本内容
-        html = html.replace(/\<script.*script\>/g, '')
-        html = html.replace(/script/g, 'noscript')
-        html = html.replace(/http(s)?:\/\/[^"\s]*/g, s => {
-            if (s.match(this.host)) {
-                return s
-            } else {
-                return ''
-            }
-        })
-
-        // 下载资源
-        let time = 0
-        for (let i = 0; i < srcs.length; i++) {
-            const src = srcs[i]
-            const fileName = src.replace(/(.*\/)/g, '')
-            const _src = src.replace(/http[^"]*(com|org)/g, path.resolve(__dirname, '../../' + this.pageId))
-            if (fileName.match(/\./)) {
-                if(!fs.existsSync(_src) && !this.srcs.find(s => s === src)) {
-                    this.srcs.push(src)
-                    time ++
-                    const timeout = time * 1e3
-                    setTimeout(() => {
-                        this.downloadImg(src, _src) 
-                    }, timeout);
-                }
-            }
-        }
-
-        // 更换超链接地址
-        html = html.replace(/&nbsp;/g, '');
-        html = html.replace(/(")(http(s)?:\/\/[^"]*)(")/g, s => {
-            const href = decodeURI(s)
-            if (href.match(/[\u4E00-\u9FA5]/g)) {
-                return href.replace(this.host, this.pageId)
-            } else {
-                return `""`
-            }
-        })
-        
-        return html
-    }
-    writePage(filepath, page, res) {
-        mkdirp(filepath, (err) => {
-            if (err) {
-                console.error(err);
-            } else {
-                debug('pow!');
-            }
-        
-            const content = `<!DOCTYPE html>
-            <html lang="zh-CN">
-            <head>
-            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-            <link rel="stylesheet" type="text/css" href="images/biquge.css">
-            </head>
-            <body>
-            ${res}
-            </body>
-            </html>`;
-        
-            fs.writeFile(`${filepath}/${page}`, content, (e) => {
-                if (e) {
-                    throw e;
-                }
-            
-                debug("It's saved!");
-                console.log('>>>页面生成成功！', filepath);
-            });
+        fileStream.on('finish', () => {
+          assetsEnd.info(`✅ 下载成功: ${decodeURI(imgUrl)}`);
+          this.downloadNum++;
+          resolve();
         });
+      };
+
+      download();
+    });
+  }
+
+  async writePage(filePath, content) {
+    try {
+      await fs.writeFile(filePath, content, 'utf8');
+      debug(`📄 页面已保存: ${filePath}`);
+    } catch (err) {
+      console.error('写入文件失败:', err);
+      throw err;
     }
-    getOneChapter(chapter) {
-        pageStart.info(decodeURI(chapter.url))
-        // 分页
-        this.c.queue({
-            uri: chapter.url,
-            jQuery: jsdom,
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-            // This will be called for each crawled page
-            callback: (error, res, done) => {
-                pageEnd.info(decodeURI(chapter.url))
-                if (error) {
-                    pageEnd.error(error)
-                }
-                else {
-                    const { $ } = res;
-                    let html = $('body').html()
-                    
-                    // 获取详情页------------------------- start
-                    // const urls = $('a');
-
-                    // this.getUrls($, urls)
-                    // 获取详情页------------------------- end
-
-                    const content = this.formatContent(html);
-                    const dirName = `../${this.pageId}`
-                    const page = `${chapter.page}`
-
-                    this.writePage(dirName, page, content);
-                }
-                done();
-            },
-        });
-    }
+  }
 }
 
-const core = new Core('http://www.ibiqu.org/')
-core.start('52_52542')
+// ======== 启动函数 (由 p-queue 加载后调用) ========
+function startCrawler() {
+  const core = new Core('https://www.bqgda.cc/books', '136187'); // 自动启动
+  console.log('>>> core', core)
+}
