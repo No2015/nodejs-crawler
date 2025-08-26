@@ -67,7 +67,7 @@ async function fetchWithRetry(url, tries = RETRY) {
     }
 
     console.log(
-      `开始抓取《${title}》，共${chapterNodes.length}章...将从第${START_INDEX + 1}章(${chapterNodes[START_INDEX].textContent.trim()})开始`
+      `开始抓取《${title}》，共${chapterNodes.length}页...将从第${START_INDEX + 1}页(${chapterNodes[START_INDEX].textContent.trim()})开始`
     );
 
     // 5. 逐章抓取
