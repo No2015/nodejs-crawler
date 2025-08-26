@@ -99,9 +99,9 @@ async function fetchWithRetry(url, tries = RETRY) {
 
           // 判断开头是否有章节标题
           // 允许前面有空白、全角空格
-          // 只要章节标题在正文开头20个字符内都算“已包含”
+          // 只要章节标题在正文开头50个字符内都算“已包含”
           const normalized = content.replace(/^[\s\u3000]+/, ''); // 去掉开头空白、全角空格
-          if (normalized.slice(0, 20).includes(chapterTitle)) {
+          if (normalized.slice(0, 50).includes(chapterTitle)) {
             // 已含标题，不加
             // nothing to do
           } else {
