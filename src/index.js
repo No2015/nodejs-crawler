@@ -149,7 +149,7 @@ class Core {
   }
 
   getUrls(document) {
-    const urls = document.querySelectorAll('#list a');
+    const urls = document.querySelectorAll('.listmain a');
     urls.forEach(urlEl => {
       const href = urlEl.getAttribute('href');
       if (!href) return;
@@ -279,7 +279,7 @@ class Core {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
-  <link rel="stylesheet" href="assets/biquge.css">
+  <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
   ${document.body.innerHTML}
