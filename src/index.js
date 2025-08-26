@@ -4,9 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const mkdirp = require('mkdirp');
 
-const ENTRY_URL = 'https://www.c9bfbcdc82.sbs/book/182355/'; // 可改成你的目录页
+const ENTRY_URL = 'https://www.c9bfbcdc82.sbs/book/182355/';
 const OUTPUT_DIR = path.join(__dirname, '../bqg');
 const RETRY = 3;
+
+// 表示从第1章开始
+const startIndex = 1; // 1-based
+const START_INDEX = Math.max(startIndex - 1, 0); // 转为0-based
 
 async function fetchWithRetry(url, tries = RETRY) {
   for (let i = 0; i < tries; i++) {
@@ -50,13 +54,26 @@ async function fetchWithRetry(url, tries = RETRY) {
     // 4. 创建输出文件
     await mkdirp(OUTPUT_DIR);
     const outPath = path.join(OUTPUT_DIR, `${title}.txt`);
-    const outStream = fs.createWriteStream(outPath, { flags: 'w', encoding: 'utf8' });
+    // 如果不是从头开始，文件必须已存在且追加写入，否则新建
+    const outStream = fs.createWriteStream(outPath, {
+      flags: START_INDEX === 0 ? 'w' : 'a',
+      encoding: 'utf8'
+    });
 
-    console.log(`开始抓取《${title}》，共${chapterNodes.length}章...`);
+    if (START_INDEX >= chapterNodes.length) {
+      console.log('指定起始章节超过总章节数，无需处理。');
+      outStream.end();
+      return;
+    }
+
+    console.log(
+      `开始抓取《${title}》，共${chapterNodes.length}章...将从第${START_INDEX + 1}章(${chapterNodes[START_INDEX].textContent.trim()})开始`
+    );
 
     // 5. 逐章抓取
-    for (let i = 0; i < chapterNodes.length; i++) {
+    for (let i = START_INDEX; i < chapterNodes.length; i++) {
       const node = chapterNodes[i];
+      const chapterTitle = node.textContent.trim();
       const chapterUrl = new URL(node.getAttribute('href'), ENTRY_URL).href;
 
       try {
@@ -65,7 +82,7 @@ async function fetchWithRetry(url, tries = RETRY) {
         const chapDoc = chapDom.window.document;
 
         const contentNode = chapDoc.querySelector('#chaptercontent');
-        let content = '';
+        let content = `${chapterTitle}\n\n`;
         if (contentNode) {
           // 清除 <p class="readinline"> ... </p>
           contentNode.querySelectorAll('p.readinline').forEach(e => e.remove());
@@ -78,13 +95,13 @@ async function fetchWithRetry(url, tries = RETRY) {
           html = html.replace(/请收藏本站.*?。/g, '');
 
           // 去除多余空行
-          content = html.replace(/\n{3,}/g, '\n\n').trim();
+          content += html.replace(/\n{3,}/g, '\n\n').trim();
         } else {
-          content = '【正文获取失败】';
+          content += '【正文获取失败】';
         }
 
         outStream.write(`${content}\n\n`);
-        console.log(`完成：${i + 1}/${chapterNodes.length}`);
+        console.log(`完成：${chapterTitle}: ${i + 1}/${chapterNodes.length}`);
         await new Promise(r => setTimeout(r, 800)); // 防ban
       } catch (err) {
         console.error('章节抓取失败：', chapterUrl, err.message);
