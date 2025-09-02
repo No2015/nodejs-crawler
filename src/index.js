@@ -447,7 +447,16 @@ class Core {
 
         await new Promise((resolve, reject) => {
           const writeStream = fs.createWriteStream(fileName);
-          const requestStream = request.get(encodeURI(imgUrl)); // 对URL编码
+          const options = {
+            url: imgUrl,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+              'Referer': getHiddenUrl(), // 根据实际网站改
+              // 如需Cookie也可加：'Cookie': 'xxx'
+            },
+            timeout: 20000
+          };
+          const requestStream = request.get(options); // request.get(encodeURI(imgUrl)); // 对URL编码
 
           requestStream.on('error', reject);
           writeStream.on('error', (err) => {
