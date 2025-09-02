@@ -546,7 +546,7 @@ class Core {
 function getHiddenUrl() {
   const encodedPath = atob('Ly9seHN3MjAyMC5jb20v');
   const protocol = '\u0068\u0074\u0074\u0070\u0073';
-  return protocol + encodedPath;
+  return `${protocol}:${encodedPath}`;
 }
 
 // ==================== 启动爬虫 ====================
